@@ -6,6 +6,7 @@ import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Input } from './ui/input';
 import type { User as UserType } from '../App';
+import { hashPassword, verifyPassword } from '../utils/security';
 
 interface ProfilePageProps {
   user: UserType;
@@ -33,10 +34,12 @@ export function ProfilePage({ user, onLogout, onNavigateToReceipts, onNavigateTo
   const [showNewPin, setShowNewPin] = useState(false);
   const [showConfirmPin, setShowConfirmPin] = useState(false);
 
-  const handleChangePinCode = (e: React.FormEvent) => {
+  const handleChangePinCode = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (pinData.currentPin !== user.pinCode) {
+    // Verify current PIN
+    const isCurrentPinValid = await verifyPassword(pinData.currentPin, user.pinCode);
+    if (!isCurrentPinValid) {
       alert('Неверный текущий пин-код');
       return;
     }
@@ -56,8 +59,11 @@ export function ProfilePage({ user, onLogout, onNavigateToReceipts, onNavigateTo
       return;
     }
 
-    // Update user with new pin code
-    const updatedUser = { ...user, pinCode: pinData.newPin };
+    // Hash the new PIN before storing
+    const hashedNewPin = await hashPassword(pinData.newPin);
+
+    // Update user with new hashed pin code
+    const updatedUser = { ...user, pinCode: hashedNewPin };
     
     // Update in localStorage
     const storedUsers = localStorage.getItem('registeredUsers');

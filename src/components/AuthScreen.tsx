@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
-import { Phone, MapPin, User as UserIcon, Mail, CreditCard, Shield, Eye, EyeOff, Lock } from 'lucide-react';
+import { Phone, MapPin, User as UserIcon, Mail, CreditCard, Shield, Eye, EyeOff, Lock, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import type { User } from '../App';
 import { SETTLEMENTS, STREETS_BY_SETTLEMENT } from '../utils/settlements';
+import { hashPassword, verifyPassword, sanitizeInput, isValidPinCode, RateLimiter, isSecureConnection } from '../utils/security';
+import { isValidAdminPassword, SECURITY_CONFIG } from '../utils/adminConfig';
 
 interface AuthScreenProps {
   onAuth: (user: User) => void;
@@ -14,11 +16,21 @@ interface AuthScreenProps {
 
 type AuthState = 'login' | 'register' | 'setPinCode' | 'forgotPin';
 
+// Initialize rate limiter
+const loginRateLimiter = new RateLimiter(
+  SECURITY_CONFIG.MAX_LOGIN_ATTEMPTS,
+  15 * 60 * 1000, // 15 minutes window
+  SECURITY_CONFIG.LOCKOUT_DURATION_MINUTES * 60 * 1000 // lockout duration
+);
+
 export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
   const [authState, setAuthState] = useState<AuthState>('login');
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
   const [tempUserData, setTempUserData] = useState<Omit<User, 'pinCode'> | null>(null);
+  const [showSecurityWarning, setShowSecurityWarning] = useState(false);
+  const [loginError, setLoginError] = useState<string>('');
+  const [isLoading, setIsLoading] = useState(false);
   
   const [formData, setFormData] = useState({
     phone: '',
@@ -37,6 +49,7 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
   const [showPinCode, setShowPinCode] = useState(false);
   const [showPinCodeConfirm, setShowPinCodeConfirm] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [streetSuggestions, setStreetSuggestions] = useState<string[]>([]);
   const [showStreetSuggestions, setShowStreetSuggestions] = useState(false);
 
@@ -49,6 +62,14 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       setAuthState('login');
     } else {
       setAuthState('register');
+    }
+    
+    // Check for saved credentials
+    const savedPhone = localStorage.getItem('rememberedPhone');
+    const savedPinCode = localStorage.getItem('rememberedPinCode');
+    if (savedPhone && savedPinCode) {
+      setFormData(prev => ({ ...prev, phone: savedPhone, pinCode: savedPinCode }));
+      setRememberMe(true);
     }
   }, []);
 
@@ -81,31 +102,70 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
     setShowStreetSuggestions(false);
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError('');
+    setIsLoading(true);
     
     if (isAdminMode) {
-      if (formData.adminPassword === 'admin123') {
+      // Admin login with secure validation
+      if (isValidAdminPassword(formData.adminPassword)) {
         onAdminAuth();
       } else {
-        alert('Неверный пароль администратора');
+        setLoginError('Неверный пароль администратора');
+        setIsLoading(false);
       }
       return;
     }
 
     if (!formData.phone || !formData.pinCode) {
-      alert('Введите номер телефона и пин-код');
+      setLoginError('Введите номер телефона и пин-код');
+      setIsLoading(false);
       return;
     }
 
-    const user = registeredUsers.find(
-      u => u.phone === formData.phone && u.pinCode === formData.pinCode
-    );
+    // Check rate limiting
+    const rateLimitCheck = loginRateLimiter.checkLimit(formData.phone);
+    if (rateLimitCheck.isLocked) {
+      setLoginError(`Слишком много попыток входа. Попробуйте снова через ${rateLimitCheck.remainingTime} минут`);
+      setIsLoading(false);
+      return;
+    }
+
+    const user = registeredUsers.find(u => u.phone === formData.phone);
     
-    if (user) {
+    if (!user) {
+      loginRateLimiter.recordAttempt(formData.phone);
+      const remaining = loginRateLimiter.getRemainingAttempts(formData.phone);
+      setLoginError(`Пользователь не найден. Осталось попыток: ${remaining}`);
+      setIsLoading(false);
+      return;
+    }
+
+    // Verify PIN code with hash
+    const isPinValid = await verifyPassword(formData.pinCode, user.pinCode);
+    
+    if (isPinValid) {
+      // Reset rate limiter on successful login
+      loginRateLimiter.resetAttempts(formData.phone);
+      
+      // Save credentials if "Remember me" is checked
+      if (rememberMe) {
+        const hashedPin = await hashPassword(formData.pinCode);
+        localStorage.setItem('rememberedPhone', formData.phone);
+        localStorage.setItem('rememberedPinCode', hashedPin);
+      } else {
+        localStorage.removeItem('rememberedPhone');
+        localStorage.removeItem('rememberedPinCode');
+      }
+      
+      setIsLoading(false);
       onAuth(user);
     } else {
-      alert('Неверный номер телефона или пин-код');
+      loginRateLimiter.recordAttempt(formData.phone);
+      const remaining = loginRateLimiter.getRemainingAttempts(formData.phone);
+      setLoginError(`Неверный пин-код. Осталось попыток: ${remaining}`);
+      setIsLoading(false);
     }
   };
 
@@ -148,38 +208,47 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
     setFormData({ ...formData, pinCode: '', pinCodeConfirm: '' });
   };
 
-  const handleSetPinCode = (e: React.FormEvent) => {
+  const handleSetPinCode = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
 
     if (!formData.pinCode || !formData.pinCodeConfirm) {
       alert('Введите и подтвердите пин-код');
+      setIsLoading(false);
       return;
     }
 
     if (formData.pinCode.length !== 4 && formData.pinCode.length !== 6) {
       alert('Пин-код должен содержать 4 или 6 цифр');
+      setIsLoading(false);
       return;
     }
 
     if (!/^\d+$/.test(formData.pinCode)) {
       alert('Пин-код должен содержать только цифры');
+      setIsLoading(false);
       return;
     }
 
     if (formData.pinCode !== formData.pinCodeConfirm) {
       alert('Пин-коды не совпадают');
+      setIsLoading(false);
       return;
     }
 
     if (!tempUserData) return;
 
+    // Hash the PIN code before storing
+    const hashedPin = await hashPassword(formData.pinCode);
+
     const newUser: User = {
       ...tempUserData,
-      pinCode: formData.pinCode
+      pinCode: hashedPin
     };
 
     setRegisteredUsers([...registeredUsers, newUser]);
     setTempUserData(null);
+    setIsLoading(false);
     onAuth(newUser);
   };
 
@@ -206,40 +275,49 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
     setFormData({ ...formData, pinCode: '', pinCodeConfirm: '' });
   };
 
-  const handleResetPinCode = (e: React.FormEvent) => {
+  const handleResetPinCode = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsLoading(true);
 
     if (!formData.pinCode || !formData.pinCodeConfirm) {
       alert('Введите и подтвердите новый пин-код');
+      setIsLoading(false);
       return;
     }
 
     if (formData.pinCode.length !== 4 && formData.pinCode.length !== 6) {
       alert('Пин-код должен содержать 4 или 6 цифр');
+      setIsLoading(false);
       return;
     }
 
     if (!/^\d+$/.test(formData.pinCode)) {
       alert('Пин-код должен содержать только цифры');
+      setIsLoading(false);
       return;
     }
 
     if (formData.pinCode !== formData.pinCodeConfirm) {
       alert('Пин-коды не совпадают');
+      setIsLoading(false);
       return;
     }
 
     if (!tempUserData) return;
 
+    // Hash the new PIN code before storing
+    const hashedPin = await hashPassword(formData.pinCode);
+
     const updatedUser: User = {
       ...tempUserData,
-      pinCode: formData.pinCode
+      pinCode: hashedPin
     };
 
     setRegisteredUsers(registeredUsers.map(u => 
       u.phone === updatedUser.phone ? updatedUser : u
     ));
     setTempUserData(null);
+    setIsLoading(false);
     onAuth(updatedUser);
   };
 
@@ -262,7 +340,7 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
               <div className="space-y-2">
                 <Label htmlFor="phone" className="flex items-center gap-2">
                   <Phone className="w-4 h-4" />
-                  Номер те��ефона
+                  Номер теефона
                 </Label>
                 <Input
                   id="phone"
@@ -301,11 +379,25 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
                 </div>
               </div>
 
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="mt-1"
+                />
+                <Label htmlFor="rememberMe" className="text-sm cursor-pointer">
+                  Запомнить меня
+                </Label>
+              </div>
+
               <Button 
                 type="submit" 
                 className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={isLoading}
               >
-                Войти
+                {isLoading ? 'Вход...' : 'Войти'}
               </Button>
 
               <div className="text-center space-y-2">
@@ -351,6 +443,12 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
                   Войти как администратор
                 </button>
               </div>
+
+              {loginError && (
+                <div className="text-red-500 text-sm mt-2">
+                  {loginError}
+                </div>
+              )}
             </form>
           </CardContent>
         </Card>

@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { Home, MessageCircle, User as UserIcon, Gauge, FileText, Wrench, Sparkles } from 'lucide-react';
+import { Home, MessageCircle, User as UserIcon, Gauge, FileText, Wrench, Sparkles, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { ImageWithFallback } from './figma/ImageWithFallback';
+import logoImage from 'figma:asset/981709ddc4b678b21b8b53259fdf071f747bc704.png';
 import { AnnouncementsPage } from './AnnouncementsPage';
 import { QAPage } from './QAPage';
 import { ProfilePage } from './ProfilePage';
@@ -8,6 +10,7 @@ import { MetersPage } from './MetersPage';
 import { ReceiptsPage } from './ReceiptsPage';
 import { PaymentPage } from './PaymentPage';
 import { RequestsPage } from './RequestsPage';
+import { AdminPanel } from './AdminPanel';
 import type { User } from '../App';
 
 interface MainAppProps {
@@ -15,7 +18,7 @@ interface MainAppProps {
   onLogout: () => void;
 }
 
-type Tab = 'announcements' | 'qa' | 'meters' | 'receipts' | 'profile' | 'payment' | 'requests';
+type Tab = 'announcements' | 'qa' | 'meters' | 'receipts' | 'profile' | 'payment' | 'requests' | 'admin';
 
 export function MainApp({ user, onLogout }: MainAppProps) {
   const [activeTab, setActiveTab] = useState<Tab>('announcements');
@@ -41,42 +44,59 @@ export function MainApp({ user, onLogout }: MainAppProps) {
 
   return (
     <div className="min-h-screen flex flex-col relative overflow-hidden">
-      {/* Animated background particles */}
+      {/* Animated background particles - lighter and subtle */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-10 w-32 h-32 bg-purple-400/20 rounded-full blur-3xl float-animation" />
-        <div className="absolute top-40 right-10 w-40 h-40 bg-blue-400/20 rounded-full blur-3xl float-animation" style={{ animationDelay: '1s' }} />
-        <div className="absolute bottom-40 left-1/4 w-36 h-36 bg-pink-400/20 rounded-full blur-3xl float-animation" style={{ animationDelay: '2s' }} />
+        <div className="absolute top-20 left-10 w-64 h-64 bg-blue-400/10 rounded-full blur-3xl float-animation" />
+        <div className="absolute top-40 right-10 w-80 h-80 bg-indigo-400/10 rounded-full blur-3xl float-animation" style={{ animationDelay: '2s' }} />
+        <div className="absolute bottom-40 left-1/4 w-72 h-72 bg-purple-400/10 rounded-full blur-3xl float-animation" style={{ animationDelay: '4s' }} />
       </div>
 
-      {/* Glassmorphic Header */}
+      {/* Glassmorphic Header with Gradient */}
       <motion.header 
         initial={{ y: -100, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="glass relative z-10 backdrop-blur-2xl shadow-2xl border-b border-white/20"
+        className="glass relative z-10 backdrop-blur-2xl shadow-xl border-b border-blue-100"
       >
-        <div className="max-w-2xl mx-auto p-6">
+        <div className="absolute inset-0 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 opacity-95" />
+        <div className="max-w-2xl mx-auto p-6 relative z-10">
           <div className="flex items-center justify-between">
-            <div>
-              <motion.h1 
-                className="text-2xl font-bold gradient-text flex items-center gap-2"
-                initial={{ scale: 0.9 }}
-                animate={{ scale: 1 }}
-                transition={{ type: "spring", stiffness: 200 }}
+            <div className="flex items-center gap-3">
+              {/* Animated Logo */}
+              <motion.div
+                initial={{ scale: 0, rotate: -180 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ type: "spring", stiffness: 200, delay: 0.1 }}
+                whileHover={{ scale: 1.1, rotate: 360 }}
+                className="w-14 h-14 rounded-2xl bg-white shadow-xl p-2 flex items-center justify-center"
               >
-                <Sparkles className="w-6 h-6 text-yellow-400" />
-                Коммунальные сервисы
-              </motion.h1>
-              <motion.p 
-                className="text-sm text-gray-600 mt-1"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2 }}
-              >
-                Привет, <span className="font-semibold text-purple-600">{user.name}</span>! 👋
-              </motion.p>
+                <ImageWithFallback
+                  src={logoImage}
+                  alt="ТВР Логотип"
+                  className="w-full h-full object-contain"
+                />
+              </motion.div>
+              
+              <div>
+                <motion.h1 
+                  className="text-2xl font-bold text-white flex items-center gap-2"
+                  initial={{ scale: 0.9 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 200 }}
+                >
+                  Коммунальные сервисы
+                </motion.h1>
+                <motion.p 
+                  className="text-sm text-blue-100 mt-1"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: 0.2 }}
+                >
+                  Привет, <span className="font-semibold text-white">{user.name}</span>! 👋
+                </motion.p>
+              </div>
             </div>
             <motion.div
-              className="w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white shadow-lg"
+              className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-xl border-2 border-white/20"
               whileHover={{ scale: 1.1, rotate: 5 }}
               whileTap={{ scale: 0.95 }}
             >
@@ -129,6 +149,7 @@ export function MainApp({ user, onLogout }: MainAppProps) {
               />
             )}
             {activeTab === 'requests' && <RequestsPage user={user} />}
+            {activeTab === 'admin' && <AdminPanel />}
           </motion.div>
         </AnimatePresence>
       </main>
@@ -148,6 +169,7 @@ export function MainApp({ user, onLogout }: MainAppProps) {
                 { id: 'receipts', icon: FileText, label: 'Счета' },
                 { id: 'qa', icon: MessageCircle, label: 'Помощь' },
                 { id: 'profile', icon: UserIcon, label: 'Профиль' },
+                { id: 'admin', icon: Shield, label: 'Админ' },
               ].map((tab) => (
                 <motion.button
                   key={tab.id}

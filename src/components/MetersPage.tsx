@@ -194,11 +194,11 @@ export function MetersPage({ user }: MetersPageProps) {
         animate={{ opacity: 1, y: 0 }}
       >
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl">
+          <div className="p-3 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl shadow-lg">
             <Gauge className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold gradient-text">Показания счетчиков</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Показания счетчиков</h2>
             <p className="text-xs text-gray-600">Передавайте вовремя и зарабатывайте баллы!</p>
           </div>
         </div>
@@ -217,7 +217,7 @@ export function MetersPage({ user }: MetersPageProps) {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="glass rounded-2xl p-4 border border-purple-200"
+        className="bg-white rounded-2xl p-4 border border-blue-100 shadow-md"
       >
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-600">📍 Адрес:</span>
