@@ -119,7 +119,7 @@ export function ReceiptsPage({ user, onNavigateToPayment }: ReceiptsPageProps) {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-4 space-y-4">
+    <div className="max-w-2xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-3 sm:space-y-4">
       <div className="flex items-center gap-2 mb-4">
         <FileText className="w-6 h-6 text-blue-600" />
         <h2 className="text-xl">Квитанции</h2>

@@ -120,7 +120,7 @@ export function AnnouncementsPage({ onNavigateToMeters, onNavigateToPayment, use
   );
 
   return (
-    <div className="max-w-2xl mx-auto p-4 space-y-6 pb-8">
+    <div className="max-w-2xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-4 sm:space-y-6 pb-6 sm:pb-8">
       {/* Quick Stats Row */}
       <div className="grid grid-cols-2 gap-4">
         {/* Debt Card with Gradient */}

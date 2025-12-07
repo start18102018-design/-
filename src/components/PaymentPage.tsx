@@ -60,7 +60,7 @@ export function PaymentPage({ user, amount, period, onBack }: PaymentPageProps) 
 
   if (isSuccess) {
     return (
-      <div className="max-w-2xl mx-auto p-4">
+      <div className="max-w-2xl mx-auto px-3 py-4 sm:px-4 sm:py-6">
         <Card className="border-0 shadow-xl">
           <CardContent className="pt-8 pb-8 text-center">
             <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -98,7 +98,7 @@ export function PaymentPage({ user, amount, period, onBack }: PaymentPageProps) 
   }
 
   return (
-    <div className="max-w-2xl mx-auto p-4 space-y-4">
+    <div className="max-w-2xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-3 sm:space-y-4">
       {/* Header */}
       <div className="flex items-center gap-3">
         <Button

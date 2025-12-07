@@ -83,7 +83,7 @@ export function ProfilePage({ user, onLogout, onNavigateToReceipts, onNavigateTo
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-4 space-y-4">
+    <div className="max-w-2xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-3 sm:space-y-4">
       {/* Profile Header */}
       <Card className="bg-blue-600 text-white border-0">
         <CardContent className="pt-6">

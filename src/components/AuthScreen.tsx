@@ -4,10 +4,22 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Captcha, Honeypot } from './ui/captcha';
 import type { User } from '../App';
 import { SETTLEMENTS, STREETS_BY_SETTLEMENT } from '../utils/settlements';
 import { hashPassword, verifyPassword, sanitizeInput, isValidPinCode, RateLimiter, isSecureConnection } from '../utils/security';
 import { isValidAdminPassword, SECURITY_CONFIG } from '../utils/adminConfig';
+import { 
+  rateLimiter, 
+  spamDetector, 
+  ipLimiter, 
+  ActionType, 
+  debounce, 
+  throttle,
+  createHoneypot 
+} from '../utils/antiSpam';
+import { DataIsolationManager, DataMigration } from '../utils/dataIsolation';
+import { toast } from 'sonner';
 
 interface AuthScreenProps {
   onAuth: (user: User) => void;
@@ -16,21 +28,27 @@ interface AuthScreenProps {
 
 type AuthState = 'login' | 'register' | 'setPinCode' | 'forgotPin';
 
-// Initialize rate limiter
+// Initialize rate limiter (legacy - keeping for backward compatibility)
 const loginRateLimiter = new RateLimiter(
   SECURITY_CONFIG.MAX_LOGIN_ATTEMPTS,
   15 * 60 * 1000, // 15 minutes window
   SECURITY_CONFIG.LOCKOUT_DURATION_MINUTES * 60 * 1000 // lockout duration
 );
 
+// Initialize honeypot
+const honeypot = createHoneypot();
+
 export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
   const [authState, setAuthState] = useState<AuthState>('login');
   const [isAdminMode, setIsAdminMode] = useState(false);
-  const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
+  const [hasAnyUsers, setHasAnyUsers] = useState(false); // Changed from registeredUsers array
   const [tempUserData, setTempUserData] = useState<Omit<User, 'pinCode'> | null>(null);
   const [showSecurityWarning, setShowSecurityWarning] = useState(false);
   const [loginError, setLoginError] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
+  const [captchaVerified, setCaptchaVerified] = useState(false);
+  const [honeypotValue, setHoneypotValue] = useState('');
+  const [loginAttempts, setLoginAttempts] = useState(0);
   
   const [formData, setFormData] = useState({
     phone: '',
@@ -53,18 +71,25 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
   const [streetSuggestions, setStreetSuggestions] = useState<string[]>([]);
   const [showStreetSuggestions, setShowStreetSuggestions] = useState(false);
 
-  // Load users from localStorage on mount
+  // Check if any users exist and handle migration
   useEffect(() => {
-    const storedUsers = localStorage.getItem('registeredUsers');
-    if (storedUsers) {
-      const users = JSON.parse(storedUsers);
-      setRegisteredUsers(users);
-      setAuthState('login');
+    // Check for legacy storage and migrate if needed
+    const legacyUsers = localStorage.getItem('registeredUsers');
+    if (legacyUsers) {
+      console.warn('[SECURITY] Migrating from insecure storage...');
+      DataMigration.migrateFromLegacyStorage().then(() => {
+        console.log('[SECURITY] Migration completed');
+        setHasAnyUsers(DataIsolationManager.hasAnyUsers());
+        setAuthState('login');
+      });
     } else {
-      setAuthState('register');
+      // Check for any users in secure storage
+      const anyUsers = DataIsolationManager.hasAnyUsers();
+      setHasAnyUsers(anyUsers);
+      setAuthState(anyUsers ? 'login' : 'register');
     }
     
-    // Check for saved credentials
+    // Check for saved credentials (keeping for remember me feature)
     const savedPhone = localStorage.getItem('rememberedPhone');
     const savedPinCode = localStorage.getItem('rememberedPinCode');
     if (savedPhone && savedPinCode) {
@@ -72,14 +97,7 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       setRememberMe(true);
     }
   }, []);
-
-  // Save users to localStorage whenever they change
-  useEffect(() => {
-    if (registeredUsers.length > 0) {
-      localStorage.setItem('registeredUsers', JSON.stringify(registeredUsers));
-    }
-  }, [registeredUsers]);
-
+  
   const availableStreets = formData.settlement ? STREETS_BY_SETTLEMENT[formData.settlement] || [] : [];
 
   const handleStreetInput = (value: string) => {
@@ -107,13 +125,49 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
     setLoginError('');
     setIsLoading(true);
     
+    // Check honeypot (bot detection)
+    if (honeypot.isBot(honeypotValue)) {
+      console.warn('[SECURITY] Bot detected via honeypot');
+      setIsLoading(false);
+      return; // Silent fail for bots
+    }
+    
+    // Check IP rate limiting
+    const ipCheck = ipLimiter.checkIP();
+    if (!ipCheck.allowed) {
+      toast.error(ipCheck.message);
+      setIsLoading(false);
+      return;
+    }
+    ipLimiter.recordRequest();
+    
     if (isAdminMode) {
-      // Admin login with secure validation
+      // Admin login with enhanced rate limiting
+      const adminRateLimit = rateLimiter.checkLimit('admin', ActionType.ADMIN_LOGIN);
+      if (!adminRateLimit.allowed) {
+        toast.error(adminRateLimit.message);
+        setIsLoading(false);
+        return;
+      }
+      
+      // Require CAPTCHA after 2 failed attempts
+      if (loginAttempts >= 2 && !captchaVerified) {
+        toast.error('Пожалуйста, пройдите проверку безопасности');
+        setIsLoading(false);
+        return;
+      }
+      
       if (isValidAdminPassword(formData.adminPassword)) {
+        rateLimiter.recordAttempt('admin', ActionType.ADMIN_LOGIN, true);
+        setLoginAttempts(0);
+        setCaptchaVerified(false);
         onAdminAuth();
       } else {
-        setLoginError('Неверный пароль администратора');
+        rateLimiter.recordAttempt('admin', ActionType.ADMIN_LOGIN, false);
+        setLoginAttempts(prev => prev + 1);
+        setLoginError('Неверные учетные данные');
         setIsLoading(false);
+        toast.error('Неверный пароль администратора');
       }
       return;
     }
@@ -124,21 +178,40 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       return;
     }
 
-    // Check rate limiting
+    // Check advanced rate limiting
+    const rateLimit = rateLimiter.checkLimit(formData.phone, ActionType.LOGIN);
+    if (!rateLimit.allowed) {
+      toast.error(rateLimit.message);
+      setLoginError(rateLimit.message!);
+      setIsLoading(false);
+      return;
+    }
+    
+    // Check legacy rate limiting (backward compatibility)
     const rateLimitCheck = loginRateLimiter.checkLimit(formData.phone);
     if (rateLimitCheck.isLocked) {
       setLoginError(`Слишком много попыток входа. Попробуйте снова через ${rateLimitCheck.remainingTime} минут`);
       setIsLoading(false);
       return;
     }
+    
+    // Require CAPTCHA after 3 failed attempts
+    if (loginAttempts >= 3 && !captchaVerified) {
+      toast.error('Пожалуйста, пройдите проверку безопасности');
+      setIsLoading(false);
+      return;
+    }
 
-    const user = registeredUsers.find(u => u.phone === formData.phone);
+    const user = DataIsolationManager.getUserByPhone(formData.phone);
     
     if (!user) {
       loginRateLimiter.recordAttempt(formData.phone);
+      rateLimiter.recordAttempt(formData.phone, ActionType.LOGIN, false);
+      setLoginAttempts(prev => prev + 1);
       const remaining = loginRateLimiter.getRemainingAttempts(formData.phone);
-      setLoginError(`Пользователь не найден. Осталось попыток: ${remaining}`);
+      setLoginError(`Неверные учетные данные. Осталось попыток: ${remaining}`);
       setIsLoading(false);
+      toast.warning(`Осталось попыток: ${remaining}`);
       return;
     }
 
@@ -146,8 +219,11 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
     const isPinValid = await verifyPassword(formData.pinCode, user.pinCode);
     
     if (isPinValid) {
-      // Reset rate limiter on successful login
+      // Reset rate limiters on successful login
       loginRateLimiter.resetAttempts(formData.phone);
+      rateLimiter.reset(formData.phone, ActionType.LOGIN);
+      setLoginAttempts(0);
+      setCaptchaVerified(false);
       
       // Save credentials if "Remember me" is checked
       if (rememberMe) {
@@ -160,35 +236,84 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       }
       
       setIsLoading(false);
+      toast.success('Вход выполнен успешно!');
       onAuth(user);
     } else {
       loginRateLimiter.recordAttempt(formData.phone);
+      rateLimiter.recordAttempt(formData.phone, ActionType.LOGIN, false);
+      setLoginAttempts(prev => prev + 1);
       const remaining = loginRateLimiter.getRemainingAttempts(formData.phone);
-      setLoginError(`Неверный пин-код. Осталось попыток: ${remaining}`);
+      setLoginError(`Неверные учетные данные. Осталось попыток: ${remaining}`);
       setIsLoading(false);
+      toast.warning(`Осталось попыток: ${remaining}`);
     }
   };
 
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Check honeypot
+    if (honeypot.isBot(honeypotValue)) {
+      console.warn('[SECURITY] Bot detected via honeypot');
+      return; // Silent fail for bots
+    }
+    
+    // Check IP rate limiting
+    const ipCheck = ipLimiter.checkIP();
+    if (!ipCheck.allowed) {
+      toast.error(ipCheck.message);
+      return;
+    }
+    ipLimiter.recordRequest();
+    
+    // Check registration rate limit
+    const rateLimit = rateLimiter.checkLimit(formData.phone || 'anonymous', ActionType.REGISTRATION);
+    if (!rateLimit.allowed) {
+      toast.error(rateLimit.message);
+      alert(rateLimit.message);
+      return;
+    }
 
     if (!formData.name || !formData.email || !formData.accountNumber || 
         !formData.settlement || !formData.street || !formData.houseNumber || 
         !formData.apartment || !formData.phone) {
+      toast.error('Заполните все обязательные поля');
       alert('Заполните все обязательные поля');
       return;
     }
 
     if (!agreedToTerms) {
+      toast.warning('Необходимо согласие на обработку персональных данных');
       alert('Необходимо согласие на обработку персональных данных');
+      return;
+    }
+    
+    // Spam detection on name and email
+    const nameSpamCheck = spamDetector.isSpam(formData.name, formData.phone);
+    if (nameSpamCheck.isSpam) {
+      console.warn('[SECURITY] Spam detected in name:', nameSpamCheck.reason);
+      toast.error('Обнаружена подозрительная активность. Пожалуйста, используйте корректные данные.');
+      return;
+    }
+    
+    const emailSpamCheck = spamDetector.isSpam(formData.email, formData.phone);
+    if (emailSpamCheck.isSpam) {
+      console.warn('[SECURITY] Spam detected in email:', emailSpamCheck.reason);
+      toast.error('Обнаружена подозрительная активность. Пожалуйста, используйте корректные данные.');
       return;
     }
 
     // Check if phone already registered
-    if (registeredUsers.some(u => u.phone === formData.phone)) {
+    if (DataIsolationManager.getUserByPhone(formData.phone)) {
+      rateLimiter.recordAttempt(formData.phone, ActionType.REGISTRATION, false);
+      toast.error('Пользователь с таким номером уже зарегистрирован');
       alert('Пользователь с таким номером телефона уже зарегистрирован');
       return;
     }
+
+    // Sanitize inputs
+    const sanitizedName = sanitizeInput(formData.name);
+    const sanitizedEmail = sanitizeInput(formData.email);
 
     // Save temporary user data without pin code
     const tempUser: Omit<User, 'pinCode'> = {
@@ -198,14 +323,15 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       street: formData.street,
       houseNumber: formData.houseNumber,
       apartment: formData.apartment,
-      name: formData.name,
-      email: formData.email,
+      name: sanitizedName,
+      email: sanitizedEmail,
       accountNumber: formData.accountNumber
     };
 
     setTempUserData(tempUser);
     setAuthState('setPinCode');
     setFormData({ ...formData, pinCode: '', pinCodeConfirm: '' });
+    toast.success('Данные сохранены. Установите PIN-код.');
   };
 
   const handleSetPinCode = async (e: React.FormEvent) => {
@@ -246,7 +372,7 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       pinCode: hashedPin
     };
 
-    setRegisteredUsers([...registeredUsers, newUser]);
+    DataIsolationManager.addUser(newUser);
     setTempUserData(null);
     setIsLoading(false);
     onAuth(newUser);
@@ -260,11 +386,9 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       return;
     }
 
-    const user = registeredUsers.find(
-      u => u.phone === formData.phone && u.accountNumber === formData.accountNumber
-    );
-
-    if (!user) {
+    const user = DataIsolationManager.getUserByPhone(formData.phone);
+    
+    if (!user || user.accountNumber !== formData.accountNumber) {
       alert('Пользователь не найден. Проверьте введенные данные.');
       return;
     }
@@ -313,9 +437,7 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
       pinCode: hashedPin
     };
 
-    setRegisteredUsers(registeredUsers.map(u => 
-      u.phone === updatedUser.phone ? updatedUser : u
-    ));
+    DataIsolationManager.updateUser(updatedUser);
     setTempUserData(null);
     setIsLoading(false);
     onAuth(updatedUser);
@@ -391,6 +513,21 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
                   Запомнить меня
                 </Label>
               </div>
+              
+              {/* Honeypot field (hidden from users, visible to bots) */}
+              <Honeypot 
+                name={honeypot.fieldName}
+                value={honeypotValue}
+                onChange={setHoneypotValue}
+              />
+              
+              {/* CAPTCHA after 3 failed attempts */}
+              {loginAttempts >= 3 && (
+                <Captcha 
+                  onVerify={setCaptchaVerified}
+                  required={true}
+                />
+              )}
 
               <Button 
                 type="submit" 
@@ -497,12 +634,28 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
                 </div>
                 <p className="text-xs text-gray-500">Для демонстрации используйте: admin123</p>
               </div>
+              
+              {/* Honeypot for admin login too */}
+              <Honeypot 
+                name={honeypot.fieldName}
+                value={honeypotValue}
+                onChange={setHoneypotValue}
+              />
+              
+              {/* CAPTCHA after 2 failed attempts for admin */}
+              {loginAttempts >= 2 && (
+                <Captcha 
+                  onVerify={setCaptchaVerified}
+                  required={true}
+                />
+              )}
 
               <Button 
                 type="submit" 
                 className="w-full bg-purple-600 hover:bg-purple-700"
+                disabled={isLoading}
               >
-                Войти как администратор
+                {isLoading ? 'Вход...' : 'Войти как администратор'}
               </Button>
 
               <div className="text-center">
@@ -693,6 +846,13 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
                   Я согласен с <a href="#" className="text-blue-600 hover:underline">условиями обработки персональных данных</a>
                 </Label>
               </div>
+              
+              {/* Honeypot for registration */}
+              <Honeypot 
+                name={honeypot.fieldName}
+                value={honeypotValue}
+                onChange={setHoneypotValue}
+              />
 
               <Button 
                 type="submit" 
@@ -701,7 +861,7 @@ export function AuthScreen({ onAuth, onAdminAuth }: AuthScreenProps) {
                 Продолжить
               </Button>
 
-              {registeredUsers.length > 0 && (
+              {hasAnyUsers && (
                 <div className="text-center">
                   <button
                     type="button"

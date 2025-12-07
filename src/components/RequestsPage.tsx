@@ -71,7 +71,7 @@ export function RequestsPage({ user }: RequestsPageProps) {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-4 space-y-4">
+    <div className="max-w-2xl mx-auto px-3 py-4 sm:px-4 sm:py-6 space-y-3 sm:space-y-4">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Wrench className="w-6 h-6 text-blue-600" />

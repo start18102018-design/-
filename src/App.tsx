@@ -22,16 +22,26 @@ export default function App() {
 
   if (!user && !isAdmin) {
     return (
-      <AuthScreen 
-        onAuth={setUser} 
-        onAdminAuth={() => setIsAdmin(true)}
-      />
+      <div className="min-h-screen w-full">
+        <AuthScreen 
+          onAuth={setUser} 
+          onAdminAuth={() => setIsAdmin(true)}
+        />
+      </div>
     );
   }
 
   if (isAdmin) {
-    return <AdminPanel onLogout={() => setIsAdmin(false)} />;
+    return (
+      <div className="min-h-screen w-full">
+        <AdminPanel onLogout={() => setIsAdmin(false)} />
+      </div>
+    );
   }
 
-  return <MainApp user={user!} onLogout={() => setUser(null)} />;
+  return (
+    <div className="min-h-screen w-full">
+      <MainApp user={user!} onLogout={() => setUser(null)} />
+    </div>
+  );
 }
